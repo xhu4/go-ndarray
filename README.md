@@ -15,8 +15,8 @@ It's still really early to say anything about this project. But my goal is to bu
 
 Main features I'm trying to implement for now:
 
--[ ] simple slicing (numpy: `A[:, 1:2:-1]`, here: `A.Slice(S.All(), S.Slice3(1,2,-1))`), that refers to the same underlying data.
--[ ] arbitrary indexing (numpy: `A[some_list_of_bool]`, here: `A.Mask([]bool)`)
--[ ] matrix multiplication
--[ ] broadcasting-enabled multiplication
+- [ ] simple slicing (numpy: `A[:, 1:2:-1]`, here: `A.Slice(S.All(), S.Slice3(1,2,-1))`), that refers to the same underlying data.
+- [ ] arbitrary indexing (numpy: `A[some_list_of_bool]`, here: `A.Mask([]bool)`)
+- [ ] matrix multiplication
+- [ ] broadcasting-enabled multiplication
 
