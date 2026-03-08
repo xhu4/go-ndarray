@@ -2,9 +2,13 @@
 package ng
 
 import (
+	"bytes"
 	"fmt"
+	"iter"
+	"log"
 	"reflect"
 	"slices"
+	"strings"
 
 	"golang.org/x/exp/constraints"
 )
@@ -18,6 +22,64 @@ type NDArray[E Number] struct {
 	data   []E
 	shape  Shape
 	stride Stride
+	offset int
+}
+
+func (arr NDArray[E]) String() string {
+	var buf bytes.Buffer
+	arr.Format(&buf, func(e E) string { return fmt.Sprint(e) }, 0, " ", " ", "\n", "[", "]")
+	return buf.String()
+}
+
+// Subarrays iterate through subarrays of arr of the last n-1 dimensions.
+// This is useful to recursively handle ndarrays.
+func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
+	if arr.Dim() <= 1 {
+		panic(fmt.Errorf("subarrays: cannot iterate over %d dim array", arr.Dim()))
+	}
+	return func(yield func(int, NDArray[E]) bool) {
+		slices := make([]Slice, arr.Dim())
+		for i := range slices {
+			slices[i] = SAll()
+		}
+		for i := range arr.shape[0] {
+			if !yield(i, arr.Slicing(S1(i))) {
+				return
+			}
+		}
+	}
+}
+
+func (arr NDArray[E]) Format(buf *bytes.Buffer, formatter func(E) string, indent int, indentStr string, elemSep string, arrSep string, arrStart string, arrEnd string) {
+	// arr is 1D array
+	log.Printf("indent=%d, arr.Shape=%v", indent, arr.Shape())
+	indentNewline := "\n" + strings.Repeat(indentStr, indent)
+	indentPlus1Newline := indentNewline + indentStr
+	arrStartIndented := strings.ReplaceAll(arrStart, "\n", indentPlus1Newline)
+	arrEndIndented := strings.ReplaceAll(arrEnd, "\n", indentNewline)
+	if arr.Dim() == 1 {
+		elemSepIndented := strings.ReplaceAll(elemSep, "\n", indentPlus1Newline)
+		buf.WriteString(arrStartIndented)
+		for i := range arr.shape[0] {
+			if i != 0 {
+				buf.WriteString(elemSepIndented)
+			}
+			buf.WriteString(formatter(*arr.At(i)))
+		}
+		buf.WriteString(arrEndIndented)
+		return
+	}
+
+	arrSepIndented := strings.ReplaceAll(arrSep, "\n", indentPlus1Newline)
+	// arr is at least 2D, recursively prints the subarrays
+	buf.WriteString(arrStartIndented)
+	for i, subarr := range arr.Subarrays() {
+		if i != 0 {
+			buf.WriteString(arrSepIndented)
+		}
+		subarr.Format(buf, formatter, indent+1, indentStr, elemSep, arrSep, arrStart, arrEnd)
+	}
+	buf.WriteString(arrEndIndented)
 }
 
 // Dim returns the dimension of this array.
@@ -26,10 +88,48 @@ func (arr NDArray[E]) Dim() int {
 }
 
 // At returns the pointer to the element at given index.
+// Index can be negative. -1 represents the last element.
 // Panics if index is out of bound.
 func (arr NDArray[E]) At(i ...int) *E {
 	checkIndexInBound(i, arr.shape)
-	return &arr.data[resolveIndex(i, arr.stride)]
+	return &arr.data[arr.offset+resolveIndex(i, arr.stride, arr.shape)]
+}
+
+// Slicing mimics numpy ndarray's slicing.
+// The correspondences:
+// - i -> S1(i)
+// - i:j -> S2(i, j)
+// - i:j:k -> S3(i, j, k)
+// Use nil for ommitted slices.
+// - : -> S2(nil, nil), or SAll()
+// - i:: -> S3(i, nil, nil)
+func (arr NDArray[E]) Slicing(s ...Slice) NDArray[E] {
+	if len(s) > arr.Dim() {
+		panic(fmt.Errorf("slicing with %d specs on a %d-dim array", len(s), arr.Dim()))
+	}
+	newShape := make([]int, 0)
+	newStride := make([]int, 0)
+	newOffset := arr.offset
+	for i, si := range s {
+		sr := si.Resolve(arr.shape[i])
+		newOffset += sr.begin * arr.stride[i]
+		if sr.step == 0 {
+			continue
+		}
+		newStride = append(newStride, arr.stride[i]*sr.step)
+		newShape = append(newShape, sr.nstep)
+	}
+	// padd SAll for missing dimensions
+	if len(s) < arr.Dim() {
+		newStride = slices.Concat(newStride, arr.stride[len(s):arr.Dim()])
+		newShape = slices.Concat(newShape, arr.shape[len(s):arr.Dim()])
+	}
+	return NDArray[E]{
+		data:   arr.data,
+		shape:  newShape,
+		stride: newStride,
+		offset: newOffset,
+	}
 }
 
 // Shape returns the shape of this array, as []int.
@@ -47,7 +147,7 @@ func NewZeros[E Number](size ...int) NDArray[E] {
 	totalSize := Shape(size).Size()
 	data := make([]E, totalSize)
 	return NDArray[E]{
-		data, size, compactStride(size),
+		data, size, compactStride(size), 0,
 	}
 }
 
@@ -85,13 +185,24 @@ func flatten[E Number](data reflect.Value, dst []E, shape Shape) {
 	}
 }
 
-func resolveIndex(query Index, stride Stride) int {
+func resolveIndex(query Index, stride Stride, shape Shape) int {
 	// assume len already checked
 	result := 0
 	for i := range len(query) {
-		result += query[i] * stride[i]
+		q := query[i]
+		if q < 0 {
+			q = shape[i] + q
+		}
+		result += q * stride[i]
 	}
 	return result
+}
+
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
 }
 
 func checkIndexInBound(query Index, shape Shape) {
@@ -99,7 +210,7 @@ func checkIndexInBound(query Index, shape Shape) {
 		panic(fmt.Errorf("query (%v) indices have wrong dimension (dim = %d)", query, len(shape)))
 	}
 	for i := range len(query) {
-		if query[i] >= shape[i] {
+		if abs(query[i]) >= shape[i] {
 			panic(fmt.Errorf("query (%v) out of bound at %d-th dim, shape = %v", query, i, shape))
 		}
 	}

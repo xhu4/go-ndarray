@@ -2,4 +2,4 @@ module github.com/xhu4/mat
 
 go 1.25.0
 
-require golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
+require golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
