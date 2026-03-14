@@ -14,7 +14,7 @@ type slicer interface {
 
 // evenSlicer represents python-like slicing.
 //
-// numpy i:j:k is equivalent to evenSlicer{begin:1, end:j, step:k}
+// numpy i:j:k is equivalent to evenSlicer{begin:i, end:j, step:k}
 // numpy i: is equivalent to evenSlicer{begin:i, end:nil}
 // The end is exclusive. Begin and end can be negative. -1 means the last element.
 // step cannot be 0
@@ -51,7 +51,11 @@ func (s evenSlicer) slice(length int, stride int) (newLen *int, newStride int, o
 			begin = length - 1
 		}
 	} else {
-		begin = *s.begin
+		if *s.begin < 0 {
+			begin = length + *s.begin
+		} else {
+			begin = *s.begin
+		}
 	}
 	if s.end == nil {
 		if s.step >= 0 {
@@ -60,7 +64,11 @@ func (s evenSlicer) slice(length int, stride int) (newLen *int, newStride int, o
 			end = -1
 		}
 	} else {
-		end = *s.end
+		if *s.end < 0 {
+			end = length + *s.end
+		} else {
+			end = *s.end
+		}
 	}
 	if begin >= length || end > length || begin < 0 || end < -1 {
 		panic(fmt.Errorf("slicing out of bound: slice %v on length %v", s, length))
@@ -68,15 +76,17 @@ func (s evenSlicer) slice(length int, stride int) (newLen *int, newStride int, o
 	newLen = new(int)
 	*newLen = nElem(begin, end, s.step)
 	newStride = stride * s.step
-	if s.step < 0 {
-		offsetDiff = stride * begin
-	}
+	offsetDiff = stride * begin
 	return
 }
 
 func (s indexSlicer) slice(length int, stride int) (newLen *int, newStride int, offsetDiff int) {
-	if s < 0 {
-		s = indexSlicer(length + int(s))
+	d := int(s)
+	if d < 0 {
+		d += length
+	}
+	if d < 0 || length <= d {
+		panic(fmt.Errorf("slicing out of bound: index %v on length %v", d, length))
 	}
 	return nil, 0, int(s) * stride
 }

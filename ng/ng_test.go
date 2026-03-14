@@ -157,12 +157,6 @@ XX{24, 25, 26}}}`,
 	}
 }
 
-func TestModification(t *testing.T) {
-	a := MustNew[int]([][]int{{1, 2}, {3, 4}})
-	*a.At(0, 0) = 5
-	a.Equal(MustNew[int]([][]int{{5, 2}, {3, 4}}))
-}
-
 func TestSlicing(t *testing.T) {
 	a := MustNew[int]([][][]int{
 		{
@@ -189,6 +183,9 @@ func TestSlicing(t *testing.T) {
 		}, {
 			[]slicer{S(), SAt(1), S(From(3), Step(-2))},
 			MustNew[int]([][]int{{9, 7}, {19, 17}, {29, 27}}),
+		}, {
+			[]slicer{S(From(2)), SAt(1), S(To(-2), Step(-1))},
+			MustNew[int]([][]int{{30}}),
 		},
 	}
 

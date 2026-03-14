@@ -46,6 +46,9 @@ func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
 }
 
 func (arr NDArray[E]) Format(buf *bytes.Buffer, formatter func(E) string, indent int, indentStr string, elemSep string, arrSep string, arrStart string, arrEnd string) {
+	if arr.Dim() == 0 {
+		buf.WriteString(formatter(*arr.At()))
+	}
 	// arr is 1D array
 	indentNewline := "\n" + strings.Repeat(indentStr, indent)
 	indentPlus1Newline := indentNewline + indentStr
@@ -173,7 +176,7 @@ func (arr NDArray[E]) Equal(other NDArray[E]) bool {
 	}
 
 	if arr.Dim() == 0 {
-		return true
+		return *arr.At() == *other.At()
 	}
 
 	if arr.Dim() == 1 {
