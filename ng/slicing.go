@@ -2,31 +2,125 @@ package ng
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 )
 
-// Slice represents python-like slicing
-// [i:j:k] -> {Begin:1, End:j, Step:k}
-// [i:] -> {Begin:i, End:nil}
-// Unlike Go, End can be negative or nil
-// End of -1 means the last element, nil means the element after the last element.
-// The End is exclusive
-// When Step == 0, it is a singular slice meaning a single item. The dimension of the array will be colapsed in this case.
-// So Slice{1, 1, 2} and Slice{1, 0, 2} can lead to different behaviors.
-type Slice struct {
-	Begin, End *int
-	Step       int
+type slicer interface {
+	// Slice a single dimension of a given array.
+	// If newLen is nil, the dimension is collapsed (when indexing a single dimension).
+	slice(length int, stride int) (newLen *int, newStride int, offsetDiff int)
 }
 
-type sliceResolved struct {
-	begin, step, nstep int
+// evenSlicer represents python-like slicing.
+//
+// numpy i:j:k is equivalent to evenSlicer{begin:1, end:j, step:k}
+// numpy i: is equivalent to evenSlicer{begin:i, end:nil}
+// The end is exclusive. Begin and end can be negative. -1 means the last element.
+// step cannot be 0
+//
+// Use S() to create a evenSlicer. E.g.
+// - : -> S()
+// - i:j:k -> S(From(i), To(j), Step(k))
+// - i::k -> S(From(i), Step(k))
+type evenSlicer struct {
+	begin, end *int
+	step       int
 }
 
-func (s Slice) String() string {
-	if s.Step == 0 {
-		// Singular case. s.Begin cannot be nil
-		return strconv.Itoa(*s.Begin)
+// indexSlicer represents python-like single index slicing.
+// It reduces the array dimension.
+//
+// Use SAt(i) to create a indexSlicer.
+type indexSlicer int
+
+func nElem(begin int, end int, step int) int {
+	minusOne := -1
+	if step < 0 {
+		minusOne = 1
 	}
+	return max(0, ((end-begin)+minusOne)/step+1)
+}
+
+func (s evenSlicer) slice(length int, stride int) (newLen *int, newStride int, offsetDiff int) {
+	var begin, end int
+	if s.begin == nil {
+		if s.step >= 0 {
+			begin = 0
+		} else {
+			begin = length - 1
+		}
+	} else {
+		begin = *s.begin
+	}
+	if s.end == nil {
+		if s.step >= 0 {
+			end = length
+		} else {
+			end = -1
+		}
+	} else {
+		end = *s.end
+	}
+	if begin >= length || end > length || begin < 0 || end < -1 {
+		panic(fmt.Errorf("slicing out of bound: slice %v on length %v", s, length))
+	}
+	newLen = new(int)
+	*newLen = nElem(begin, end, s.step)
+	newStride = stride * s.step
+	if s.step < 0 {
+		offsetDiff = stride * begin
+	}
+	return
+}
+
+func (s indexSlicer) slice(length int, stride int) (newLen *int, newStride int, offsetDiff int) {
+	if s < 0 {
+		s = indexSlicer(length + int(s))
+	}
+	return nil, 0, int(s) * stride
+}
+
+func (s indexSlicer) String() string {
+	return strconv.Itoa(int(s))
+}
+
+type sliceArg func(*evenSlicer)
+
+func From(i int) sliceArg {
+	return func(s *evenSlicer) {
+		s.begin = &i
+	}
+}
+
+func To(i int) sliceArg {
+	return func(s *evenSlicer) {
+		s.end = &i
+	}
+}
+
+func Step(i int) sliceArg {
+	if i == 0 {
+		panic("step size 0 is not allowed. Use SAt for singular slicing")
+	}
+	return func(s *evenSlicer) {
+		s.step = i
+	}
+}
+
+func S(args ...sliceArg) evenSlicer {
+	s := evenSlicer{nil, nil, 1}
+	for _, arg := range args {
+		arg(&s)
+	}
+	return s
+}
+
+func SAt(i int) indexSlicer {
+	return indexSlicer(i)
+}
+
+func (s evenSlicer) String() string {
 	itoa := func(i *int) string {
 		if i == nil {
 			return ""
@@ -34,85 +128,12 @@ func (s Slice) String() string {
 		return strconv.Itoa(*i)
 	}
 	var buf bytes.Buffer
-	buf.WriteString(itoa(s.Begin))
+	buf.WriteString(itoa(s.begin))
 	buf.WriteByte(':')
-	buf.WriteString(itoa(s.End))
-	if s.Step != 1 {
+	buf.WriteString(itoa(s.end))
+	if s.step != 1 {
 		buf.WriteByte(':')
-		buf.WriteString(strconv.Itoa(s.Step))
+		buf.WriteString(strconv.Itoa(s.step))
 	}
 	return buf.String()
-}
-
-// SAll returns a Slice representing all elements, starting from 0 to the end.
-func SAll() Slice {
-	return Slice{nil, nil, 1}
-}
-
-// S2 returns a Slice with step size 1. Set end to nil to represents the end.
-// Note the end is copied into the returning Slice.
-func S2(begin *int, end *int) Slice {
-	return S3(deepcopy(begin), deepcopy(end), 1)
-}
-
-// S3 returns a Slice.
-// Note the end is copied into the returning Slice.
-func S3(begin, end *int, step int) Slice {
-	if step == 0 {
-		panic("S3: step cannot be 0 (use S1 for singular case)")
-	}
-	return Slice{deepcopy(begin), deepcopy(end), step}
-}
-
-// S1 represents a singular Slice corresponding to a single index in numpy slicing.
-func S1(i int) Slice {
-	return Slice{deepcopy(&i), deepcopy(&i), 0}
-}
-
-func (s Slice) IsSingular() bool {
-	return s.Step == 0
-}
-
-func (s Slice) Resolve(length int) sliceResolved {
-	tBeginFEnd := map[bool]int{
-		true:  0,
-		false: length - 1,
-	}
-	var inclusive sliceResolved
-	if s.Begin == nil {
-		inclusive.begin = tBeginFEnd[s.Step >= 0]
-	} else if *s.Begin < 0 {
-		inclusive.begin = length + *s.Begin
-	} else {
-		inclusive.begin = *s.Begin
-	}
-
-	if s.Step == 0 {
-		return inclusive
-	}
-
-	var endInclusive int
-	if s.End == nil {
-		endInclusive = tBeginFEnd[s.Step < 0]
-	} else if *s.End < 0 {
-		endInclusive = length + *s.End
-		if s.Step > 0 {
-			endInclusive--
-		} else if s.Step < 0 {
-			endInclusive++
-		}
-	} else {
-		endInclusive = *s.End
-	}
-	inclusive.nstep = (endInclusive-inclusive.begin)/s.Step + 1
-	inclusive.step = s.Step
-	return inclusive
-}
-
-func deepcopy(i *int) *int {
-	if i == nil {
-		return nil
-	}
-	copy := *i
-	return &copy
 }

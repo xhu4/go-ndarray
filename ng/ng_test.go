@@ -66,9 +66,9 @@ func TestGetShape(t *testing.T) {
 
 func TestNewZeros(t *testing.T) {
 	data := [][]float64{{1.0, 1.1}, {2.0, 2.1}, {3.0, 3.1}}
-	mat, err := NewArray[float64](data)
+	mat, err := New[float64](data)
 	if err != nil {
-		t.Errorf("NewArray() error: %v", err)
+		t.Errorf("New() error: %v", err)
 	}
 	for i := range 3 {
 		for j := range 2 {
@@ -80,7 +80,7 @@ func TestNewZeros(t *testing.T) {
 }
 
 func TestFormat(t *testing.T) {
-	a, _ := NewArray[int]([][][]int{
+	a, _ := New[int]([][][]int{
 		{
 			{1, 2, 3},
 			{4, 5, 6},
@@ -157,8 +157,14 @@ XX{24, 25, 26}}}`,
 	}
 }
 
-func ExampleNDArray() {
-	a, _ := NewArray[int]([][][]int{
+func TestModification(t *testing.T) {
+	a := MustNew[int]([][]int{{1, 2}, {3, 4}})
+	*a.At(0, 0) = 5
+	a.Equal(MustNew[int]([][]int{{5, 2}, {3, 4}}))
+}
+
+func TestSlicing(t *testing.T) {
+	a := MustNew[int]([][][]int{
 		{
 			{1, 2, 3, 4, 5},
 			{6, 7, 8, 9, 10},
@@ -172,7 +178,44 @@ func ExampleNDArray() {
 			{26, 27, 28, 29, 30},
 		},
 	})
-	s := a.Slicing(S1(1), S3(nil, nil, -1), SAll())
+
+	tests := []struct {
+		slices []slicer
+		want   NDArray[int]
+	}{
+		{
+			[]slicer{SAt(0)},
+			MustNew[int]([][]int{{1, 2, 3, 4, 5}, {6, 7, 8, 9, 10}}),
+		}, {
+			[]slicer{S(), SAt(1), S(From(3), Step(-2))},
+			MustNew[int]([][]int{{9, 7}, {19, 17}, {29, 27}}),
+		},
+	}
+
+	for _, test := range tests {
+		got := a.Slice(test.slices...)
+		if !got.Equal(test.want) {
+			t.Errorf("a.Slice%v = \n%v, want \n%v", test.slices, got, test.want)
+		}
+	}
+}
+
+func ExampleNDArray() {
+	a := MustNew[int]([][][]int{
+		{
+			{1, 2, 3, 4, 5},
+			{6, 7, 8, 9, 10},
+		},
+		{
+			{11, 12, 13, 14, 15},
+			{16, 17, 18, 19, 20},
+		},
+		{
+			{21, 22, 23, 24, 25},
+			{26, 27, 28, 29, 30},
+		},
+	})
+	s := a.Slice(SAt(1), S(Step(-1)))
 	fmt.Printf("%v", s)
 	// Output:
 	// [[16 17 18 19 20]

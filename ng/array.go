@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"iter"
-	"log"
 	"reflect"
 	"slices"
 	"strings"
@@ -38,12 +37,8 @@ func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
 		panic(fmt.Errorf("subarrays: cannot iterate over %d dim array", arr.Dim()))
 	}
 	return func(yield func(int, NDArray[E]) bool) {
-		slices := make([]Slice, arr.Dim())
-		for i := range slices {
-			slices[i] = SAll()
-		}
 		for i := range arr.shape[0] {
-			if !yield(i, arr.Slicing(S1(i))) {
+			if !yield(i, arr.Slice(SAt(i))) {
 				return
 			}
 		}
@@ -52,7 +47,6 @@ func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
 
 func (arr NDArray[E]) Format(buf *bytes.Buffer, formatter func(E) string, indent int, indentStr string, elemSep string, arrSep string, arrStart string, arrEnd string) {
 	// arr is 1D array
-	log.Printf("indent=%d, arr.Shape=%v", indent, arr.Shape())
 	indentNewline := "\n" + strings.Repeat(indentStr, indent)
 	indentPlus1Newline := indentNewline + indentStr
 	arrStartIndented := strings.ReplaceAll(arrStart, "\n", indentPlus1Newline)
@@ -95,15 +89,15 @@ func (arr NDArray[E]) At(i ...int) *E {
 	return &arr.data[arr.offset+resolveIndex(i, arr.stride, arr.shape)]
 }
 
-// Slicing mimics numpy ndarray's slicing.
-// The correspondences:
-// - i -> S1(i)
-// - i:j -> S2(i, j)
-// - i:j:k -> S3(i, j, k)
-// Use nil for ommitted slices.
-// - : -> S2(nil, nil), or SAll()
-// - i:: -> S3(i, nil, nil)
-func (arr NDArray[E]) Slicing(s ...Slice) NDArray[E] {
+// Slice the ndarray. Each input corresponds to a dimension.
+// Each input can be created using either
+//   - S(From(i), To(j), Step(k)) to slice a dimension from i to j (exclusive) every k steps, or
+//   - SAt(i) to take the i-th element of this dimension, which reduces the dimension of the array by 1.
+//
+// If you are familiar with numpy ndarray, here are some correspondences.
+//   - arr.Slice(S(From(3), To(-1)), SAt(2)) is equivalent to arr[3:-1, 2].
+//   - arr.Slice(S(Step(-1)), S(To(2))) is equivalent to arr[::-1, :2].
+func (arr NDArray[E]) Slice(s ...slicer) NDArray[E] {
 	if len(s) > arr.Dim() {
 		panic(fmt.Errorf("slicing with %d specs on a %d-dim array", len(s), arr.Dim()))
 	}
@@ -111,15 +105,15 @@ func (arr NDArray[E]) Slicing(s ...Slice) NDArray[E] {
 	newStride := make([]int, 0)
 	newOffset := arr.offset
 	for i, si := range s {
-		sr := si.Resolve(arr.shape[i])
-		newOffset += sr.begin * arr.stride[i]
-		if sr.step == 0 {
+		shape, stride, offsetChange := si.slice(arr.shape[i], arr.stride[i])
+		newOffset += offsetChange
+		if shape == nil {
 			continue
 		}
-		newStride = append(newStride, arr.stride[i]*sr.step)
-		newShape = append(newShape, sr.nstep)
+		newStride = append(newStride, stride)
+		newShape = append(newShape, *shape)
 	}
-	// padd SAll for missing dimensions
+	// pad S() for missing dimensions
 	if len(s) < arr.Dim() {
 		newStride = slices.Concat(newStride, arr.stride[len(s):arr.Dim()])
 		newShape = slices.Concat(newShape, arr.shape[len(s):arr.Dim()])
@@ -151,10 +145,10 @@ func NewZeros[E Number](size ...int) NDArray[E] {
 	}
 }
 
-// NewArray returns an NDArray using given data.
+// New returns an NDArray using given data.
 // The data needs to be slice/array of E or slice/array of slice/array of E or etc.
 // The shape needs to be uniform or it will return an error.
-func NewArray[E Number](data any) (NDArray[E], error) {
+func New[E Number](data any) (NDArray[E], error) {
 	var result NDArray[E]
 	shape, err := getShape(reflect.ValueOf(data))
 	if err != nil {
@@ -163,6 +157,49 @@ func NewArray[E Number](data any) (NDArray[E], error) {
 	result = NewZeros[E](shape...)
 	flatten(reflect.ValueOf(data), result.data, result.shape)
 	return result, nil
+}
+
+func MustNew[E Number](data any) NDArray[E] {
+	arr, err := New[E](data)
+	if err != nil {
+		panic(err)
+	}
+	return arr
+}
+
+func (arr NDArray[E]) Equal(other NDArray[E]) bool {
+	if !arr.shape.Equal(other.shape) {
+		return false
+	}
+
+	if arr.Dim() == 0 {
+		return true
+	}
+
+	if arr.Dim() == 1 {
+		for i := range arr.shape[0] {
+			if *arr.At(i) != *other.At(i) {
+				return false
+			}
+		}
+		return true
+	}
+
+	next1, stop1 := iter.Pull2(arr.Subarrays())
+	next2, stop2 := iter.Pull2(other.Subarrays())
+	defer stop1()
+	defer stop2()
+
+	for {
+		_, sub1, ok1 := next1()
+		_, sub2, ok2 := next2()
+		if !ok1 || !ok2 {
+			return true
+		}
+		if !sub1.Equal(sub2) {
+			return false
+		}
+	}
 }
 
 func flatten[E Number](data reflect.Value, dst []E, shape Shape) {
@@ -198,19 +235,12 @@ func resolveIndex(query Index, stride Stride, shape Shape) int {
 	return result
 }
 
-func abs(i int) int {
-	if i < 0 {
-		return -i
-	}
-	return i
-}
-
 func checkIndexInBound(query Index, shape Shape) {
 	if len(query) != len(shape) {
 		panic(fmt.Errorf("query (%v) indices have wrong dimension (dim = %d)", query, len(shape)))
 	}
 	for i := range len(query) {
-		if abs(query[i]) >= shape[i] {
+		if query[i] >= shape[i] || query[i] < -shape[i] {
 			panic(fmt.Errorf("query (%v) out of bound at %d-th dim, shape = %v", query, i, shape))
 		}
 	}
