@@ -250,6 +250,85 @@ func TestSlicing(t *testing.T) {
 	}
 }
 
+func TestAllElems(t *testing.T) {
+	a := MustNew[int]([][]int{{1, 2, 3}, {4, 5, 6}})
+
+	t.Run("AllElemsL", func(t *testing.T) {
+		wantIndices := []Index{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}}
+		wantVals := []int{1, 2, 3, 4, 5, 6}
+		var gotIndices []Index
+		var gotVals []int
+		for idx, p := range a.AllElemsL() {
+			gotIndices = append(gotIndices, slices.Clone(idx))
+			gotVals = append(gotVals, *p)
+		}
+		if !reflect.DeepEqual(gotIndices, wantIndices) {
+			t.Errorf("AllElemsL indices = %v, want %v", gotIndices, wantIndices)
+		}
+		if !slices.Equal(gotVals, wantVals) {
+			t.Errorf("AllElemsL values = %v, want %v", gotVals, wantVals)
+		}
+	})
+
+	t.Run("AllElemsF", func(t *testing.T) {
+		wantIndices := []Index{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, {1, 2}}
+		wantVals := []int{1, 4, 2, 5, 3, 6}
+		var gotIndices []Index
+		var gotVals []int
+		for idx, p := range a.AllElemsF() {
+			gotIndices = append(gotIndices, slices.Clone(idx))
+			gotVals = append(gotVals, *p)
+		}
+		if !reflect.DeepEqual(gotIndices, wantIndices) {
+			t.Errorf("AllElemsF indices = %v, want %v", gotIndices, wantIndices)
+		}
+		if !slices.Equal(gotVals, wantVals) {
+			t.Errorf("AllElemsF values = %v, want %v", gotVals, wantVals)
+		}
+	})
+}
+
+func TestAssign(t *testing.T) {
+	src := MustNew[int]([][]int{{1, 2}, {3, 4}})
+	dst := NewZeros[int](2, 2)
+	if err := dst.Assign(src); err != nil {
+		t.Fatalf("Assign error: %v", err)
+	}
+	if !dst.Equal(src) {
+		t.Errorf("after Assign: dst = %v, want %v", dst, src)
+	}
+
+	// shape mismatch
+	other := NewZeros[int](3, 2)
+	if err := dst.Assign(other); err == nil {
+		t.Errorf("Assign with shape mismatch should return an error")
+	}
+
+	// assign non-contiguous (sliced) src
+	big := MustNew[int]([][]int{{10, 20, 30}, {40, 50, 60}})
+	col := big.Slice(S(), SAt(1)) // [20, 50]
+	dst1 := NewZeros[int](2)
+	if err := dst1.Assign(col); err != nil {
+		t.Fatalf("Assign non-contiguous error: %v", err)
+	}
+	if !dst1.Equal(MustNew[int]([]int{20, 50})) {
+		t.Errorf("Assign non-contiguous: got %v", dst1)
+	}
+}
+
+func TestClone(t *testing.T) {
+	src := MustNew[int]([][]int{{1, 2}, {3, 4}})
+	clone := src.Clone()
+	if !clone.Equal(src) {
+		t.Errorf("Clone() = %v, want %v", clone, src)
+	}
+	// mutating clone must not affect src
+	*clone.At(0, 0) = 99
+	if *src.At(0, 0) == 99 {
+		t.Errorf("Clone() shares data with original")
+	}
+}
+
 func ExampleNDArray() {
 	a := MustNew[int]([][][]int{
 		{
