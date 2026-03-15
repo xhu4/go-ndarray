@@ -130,6 +130,83 @@ func (arr NDArray[E]) Slice(s ...slicer) NDArray[E] {
 	}
 }
 
+// AllElemsL iterate through all elements, last dimension changes first.
+func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] {
+	return func(yield func(Index, *E) bool) {
+		for idx := range arr.shape.indicesL() {
+			if !yield(idx, arr.At(idx...)) {
+				return
+			}
+		}
+	}
+}
+
+// AllElemsF iterate through all elements, first dimension changes first.
+func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] {
+	return func(yield func(Index, *E) bool) {
+		for idx := range arr.shape.indicesF() {
+			if !yield(idx, arr.At(idx...)) {
+				return
+			}
+		}
+	}
+}
+
+func (arr NDArray[E]) Assign(other NDArray[E]) error {
+	if !arr.shape.Equal(other.shape) {
+		return fmt.Errorf("assign: shape mismatch (%v <- %v)", arr.shape, other.shape)
+	}
+
+	if arr.stride.Equal(other.stride) && isContiguous(arr.shape, arr.stride) {
+		copy(arr.data[arr.offset:arr.Size()], other.data[other.offset:other.Size()])
+		return nil
+	}
+	for idx := range arr.shape.indicesL() {
+		*arr.At(idx...) = *other.At(idx...)
+	}
+	return nil
+}
+
+func (arr NDArray[E]) Clone() NDArray[E] {
+	newArr := NewZeros[E](arr.shape...)
+	err := newArr.Assign(arr)
+	if err != nil {
+		panic(fmt.Errorf("clone: %v", err))
+	}
+	return newArr
+}
+
+func isContiguous(shape Shape, stride Stride) bool {
+	if len(shape) != len(stride) {
+		panic("shape and stride not in the same dimension")
+	}
+	if len(shape) == 0 {
+		return true
+	}
+	return isContiguousRowMajor(shape, stride) || isContiguousColMajor(shape, stride)
+}
+
+func isContiguousColMajor(shape Shape, stride Stride) bool {
+	return isContiguousRowMajor(shape, reversed(stride))
+}
+
+func isContiguousRowMajor(shape Shape, stride Stride) bool {
+	expect := 1
+	for i := range len(shape) {
+		if stride[i] != expect {
+			return false
+		}
+		expect *= shape[i]
+	}
+	return true
+}
+
+func reversed[E any](arr []E) []E {
+	result := slices.Clone(arr)
+	slices.Reverse(result)
+	return result
+}
+
 // Shape returns the shape of this array, as []int.
 func (arr NDArray[E]) Shape() Shape {
 	return slices.Clone(arr.shape)
