@@ -59,26 +59,17 @@ func nextIndexF(idx Index, s Shape) Index {
 	return nil
 }
 
-func (s Shape) indicesL() iter.Seq[Index] {
-	var idx Index = make([]int, len(s))
+func (s Shape) indices(next func(Index, Shape) Index) iter.Seq[Index] {
+	idx := make(Index, len(s))
 	return func(yield func(Index) bool) {
 		for idx != nil {
 			if !yield(idx) {
 				return
 			}
-			idx = nextIndexL(idx, s)
+			idx = next(idx, s)
 		}
 	}
 }
 
-func (s Shape) indicesF() iter.Seq[Index] {
-	var idx Index = make([]int, len(s))
-	return func(yield func(Index) bool) {
-		for idx != nil {
-			if !yield(idx) {
-				return
-			}
-			idx = nextIndexF(idx, s)
-		}
-	}
-}
+func (s Shape) indicesL() iter.Seq[Index] { return s.indices(nextIndexL) }
+func (s Shape) indicesF() iter.Seq[Index] { return s.indices(nextIndexF) }

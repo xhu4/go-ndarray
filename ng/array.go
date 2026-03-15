@@ -130,10 +130,9 @@ func (arr NDArray[E]) Slice(s ...slicer) NDArray[E] {
 	}
 }
 
-// AllElemsL iterate through all elements, last dimension changes first.
-func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] {
+func (arr NDArray[E]) allElems(seq iter.Seq[Index]) iter.Seq2[Index, *E] {
 	return func(yield func(Index, *E) bool) {
-		for idx := range arr.shape.indicesL() {
+		for idx := range seq {
 			if !yield(idx, arr.At(idx...)) {
 				return
 			}
@@ -141,16 +140,11 @@ func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] {
 	}
 }
 
+// AllElemsL iterate through all elements, last dimension changes first.
+func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesL()) }
+
 // AllElemsF iterate through all elements, first dimension changes first.
-func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] {
-	return func(yield func(Index, *E) bool) {
-		for idx := range arr.shape.indicesF() {
-			if !yield(idx, arr.At(idx...)) {
-				return
-			}
-		}
-	}
-}
+func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesF()) }
 
 func (arr NDArray[E]) Assign(other NDArray[E]) error {
 	if !arr.shape.Equal(other.shape) {
