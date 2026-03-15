@@ -48,6 +48,7 @@ func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
 func (arr NDArray[E]) Format(buf *bytes.Buffer, formatter func(E) string, indent int, indentStr string, elemSep string, arrSep string, arrStart string, arrEnd string) {
 	if arr.Dim() == 0 {
 		buf.WriteString(formatter(*arr.At()))
+		return
 	}
 	// arr is 1D array
 	indentNewline := "\n" + strings.Repeat(indentStr, indent)
@@ -168,6 +169,15 @@ func MustNew[E Number](data any) NDArray[E] {
 		panic(err)
 	}
 	return arr
+}
+
+// NewScalar returns a zero-dim ndarray of a single value
+func NewScalar[E Number](data E) NDArray[E] {
+	array := make([]E, 1)
+	array[0] = data
+	return NDArray[E]{
+		array, make([]int, 0), make([]int, 0), 0,
+	}
 }
 
 func (arr NDArray[E]) Equal(other NDArray[E]) bool {
