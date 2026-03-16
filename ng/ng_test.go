@@ -329,6 +329,115 @@ func TestClone(t *testing.T) {
 	}
 }
 
+// TestAssignFastPathSourceOffset tests Assign when the source is a 1-D view
+// with a non-zero offset.  The fast-path copy uses
+//
+//	copy(arr.data[arr.offset : arr.Size()], other.data[other.offset : other.Size()])
+//
+// but arr.Size() / other.Size() are element counts, not absolute end indices.
+// When other.offset != 0, the end index must be other.offset+other.Size();
+// as written it silently copies the wrong (too-short) region.
+func TestAssignFastPathSourceOffset(t *testing.T) {
+	src := MustNew[int]([]int{10, 20, 30, 40, 50})
+	view := src.Slice(S(From(2))) // [30 40 50], offset=2, stride=[1]
+	dst := NewZeros[int](3)       // offset=0, stride=[1] → triggers fast path
+	if err := dst.Assign(view); err != nil {
+		t.Fatalf("Assign error: %v", err)
+	}
+	want := MustNew[int]([]int{30, 40, 50})
+	if !dst.Equal(want) {
+		t.Errorf("Assign (offset source): got %v, want %v", dst, want)
+	}
+}
+
+// TestAssignFastPathDestOffset tests Assign when the destination is a 1-D view
+// with a non-zero offset that exceeds Size().  The buggy fast path computes
+// arr.data[arr.offset : arr.Size()], which panics when offset > Size().
+func TestAssignFastPathDestOffset(t *testing.T) {
+	buf := NewZeros[int](10)
+	dst := buf.Slice(S(From(5), To(8))) // offset=5, shape=[3], stride=[1]
+	src := MustNew[int]([]int{1, 2, 3})
+
+	panicked := func() (p any) {
+		defer func() { p = recover() }()
+		_ = dst.Assign(src)
+		return nil
+	}()
+	if panicked != nil {
+		t.Fatalf("Assign panicked: %v (slice bounds bug: arr.data[offset:Size()] when offset > Size())", panicked)
+	}
+	for i, want := range []int{1, 2, 3} {
+		if got := *buf.At(5 + i); got != want {
+			t.Errorf("buf[%d] = %d, want %d", 5+i, got, want)
+		}
+	}
+}
+
+// TestAssignFastPath2DOffset tests Assign for a 2-D view that shares the same
+// stride as a compact array but has a non-zero offset.
+//
+// Currently isContiguousRowMajor incorrectly checks stride[0]==1 (column-major)
+// instead of stride[last]==1 (row-major), so isContiguous returns false for
+// standard 2-D arrays and the fast path is never taken — masking Bug 1 for 2-D.
+// This test will start failing once isContiguous is fixed to correctly identify
+// row-major arrays, unless the slice-bounds bug in the fast path is also fixed.
+func TestAssignFastPath2DOffset(t *testing.T) {
+	big := MustNew[int]([][]int{
+		{1, 2, 3},
+		{4, 5, 6},
+		{7, 8, 9},
+		{10, 11, 12},
+	}) // shape=[4,3], compact stride=[3,1]
+	view := big.Slice(S(From(1), To(3))) // rows 1–2: [[4 5 6][7 8 9]], offset=3, stride=[3,1]
+	dst := NewZeros[int](2, 3)           // stride=[3,1] — same as view
+	if err := dst.Assign(view); err != nil {
+		t.Fatalf("Assign error: %v", err)
+	}
+	want := MustNew[int]([][]int{{4, 5, 6}, {7, 8, 9}})
+	if !dst.Equal(want) {
+		t.Errorf("Assign 2-D offset view: got %v, want %v", dst, want)
+	}
+}
+
+// TestIndicesNoAliasing verifies that each Index yielded by indicesL / indicesF
+// is independent so callers can safely store it without cloning.
+//
+// The current implementation reuses and mutates a single idx slice: every entry
+// appended without cloning aliases the same backing array.  After the iterator
+// finishes, nextIndex* resets the array to all-zeros, so all stored entries
+// appear as [0 0 …] rather than their original values.  The test detects this
+// by checking the last collected index, which should be the shape's last index
+// ([1 2] for shape [2 3]) but reads [0 0] when aliasing is present.
+func TestIndicesNoAliasing(t *testing.T) {
+	s := Shape{2, 3}
+
+	t.Run("indicesL", func(t *testing.T) {
+		var collected []Index
+		for idx := range s.indicesL() {
+			collected = append(collected, idx) // no clone — intentional
+		}
+		// Last index must still be [1 2]; aliasing leaves it as [0 0] (post-loop reset).
+		wantLast := Index{1, 2}
+		last := collected[len(collected)-1]
+		if !last.Equal(wantLast) {
+			t.Errorf("collected[last] = %v, want %v (aliasing: all entries share the same backing slice)", last, wantLast)
+		}
+	})
+
+	t.Run("indicesF", func(t *testing.T) {
+		var collected []Index
+		for idx := range s.indicesF() {
+			collected = append(collected, idx) // no clone — intentional
+		}
+		// For first-dim-fastest order the last index is also [1 2].
+		wantLast := Index{1, 2}
+		last := collected[len(collected)-1]
+		if !last.Equal(wantLast) {
+			t.Errorf("collected[last] = %v, want %v (aliasing: all entries share the same backing slice)", last, wantLast)
+		}
+	})
+}
+
 func ExampleNDArray() {
 	a := MustNew[int]([][][]int{
 		{
