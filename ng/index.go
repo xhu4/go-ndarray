@@ -63,7 +63,9 @@ func (s Shape) indices(next func(Index, Shape) Index) iter.Seq[Index] {
 	idx := make(Index, len(s))
 	return func(yield func(Index) bool) {
 		for idx != nil {
-			if !yield(idx) {
+			// Yield a copy of idx so callers don't observe it mutating across iterations.
+			current := slices.Clone(idx)
+			if !yield(current) {
 				return
 			}
 			idx = next(idx, s)
