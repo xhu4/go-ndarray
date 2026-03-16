@@ -130,6 +130,89 @@ func (arr NDArray[E]) Slice(s ...slicer) NDArray[E] {
 	}
 }
 
+func (arr NDArray[E]) allElems(seq iter.Seq[Index]) iter.Seq2[Index, *E] {
+	return func(yield func(Index, *E) bool) {
+		for idx := range seq {
+			if !yield(idx, arr.At(idx...)) {
+				return
+			}
+		}
+	}
+}
+
+// AllElemsL iterates through all elements, last dimension changes first.
+func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesL()) }
+
+// AllElemsF iterates through all elements, first dimension changes first.
+func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesF()) }
+
+func (arr NDArray[E]) Assign(other NDArray[E]) error {
+	if !arr.shape.Equal(other.shape) {
+		return fmt.Errorf("assign: shape mismatch (%v <- %v)", arr.shape, other.shape)
+	}
+
+	if arr.stride.Equal(other.stride) && isContiguous(arr.shape, arr.stride) {
+		copy(
+			arr.data[arr.offset:arr.offset+arr.Size()],
+			other.data[other.offset:other.offset+other.Size()],
+		)
+		return nil
+	}
+	for idx := range arr.shape.indicesL() {
+		*arr.At(idx...) = *other.At(idx...)
+	}
+	return nil
+}
+
+func (arr NDArray[E]) Clone() NDArray[E] {
+	newArr := NewZeros[E](arr.shape...)
+	err := newArr.Assign(arr)
+	if err != nil {
+		panic(fmt.Errorf("clone: %v", err))
+	}
+	return newArr
+}
+
+func isContiguous(shape Shape, stride Stride) bool {
+	if len(shape) != len(stride) {
+		panic("shape and stride not in the same dimension")
+	}
+	if len(shape) == 0 {
+		return true
+	}
+	return isContiguousRowMajor(shape, stride) || isContiguousColMajor(shape, stride)
+}
+
+func isContiguousColMajor(shape Shape, stride Stride) bool {
+	// Column-major contiguous layout: the first index moves fastest.
+	// This implies:
+	//   stride[0] == 1
+	//   stride[i] == stride[i-1] * shape[i-1] for i > 0
+	expect := 1
+	for i := range len(shape) {
+		if stride[i] != expect {
+			return false
+		}
+		expect *= shape[i]
+	}
+	return true
+}
+
+func isContiguousRowMajor(shape Shape, stride Stride) bool {
+	// Row-major contiguous layout: the last index moves fastest.
+	// This implies:
+	//   stride[len-1] == 1
+	//   stride[i] == stride[i+1] * shape[i+1] for 0 <= i < len-1
+	expect := 1
+	for i := len(shape) - 1; i >= 0; i-- {
+		if stride[i] != expect {
+			return false
+		}
+		expect *= shape[i]
+	}
+	return true
+}
+
 // Shape returns the shape of this array, as []int.
 func (arr NDArray[E]) Shape() Shape {
 	return slices.Clone(arr.shape)
