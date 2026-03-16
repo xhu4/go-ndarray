@@ -152,7 +152,10 @@ func (arr NDArray[E]) Assign(other NDArray[E]) error {
 	}
 
 	if arr.stride.Equal(other.stride) && isContiguous(arr.shape, arr.stride) {
-		copy(arr.data[arr.offset:arr.Size()], other.data[other.offset:other.Size()])
+		copy(
+			arr.data[arr.offset:arr.offset+arr.Size()],
+			other.data[other.offset:other.offset+other.Size()],
+		)
 		return nil
 	}
 	for idx := range arr.shape.indicesL() {
