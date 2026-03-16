@@ -184,12 +184,27 @@ func isContiguous(shape Shape, stride Stride) bool {
 }
 
 func isContiguousColMajor(shape Shape, stride Stride) bool {
-	return isContiguousRowMajor(shape, reversed(stride))
+	// Column-major contiguous layout: the first index moves fastest.
+	// This implies:
+	//   stride[0] == 1
+	//   stride[i] == stride[i-1] * shape[i-1] for i > 0
+	expect := 1
+	for i := 0; i < len(shape); i++ {
+		if stride[i] != expect {
+			return false
+		}
+		expect *= shape[i]
+	}
+	return true
 }
 
 func isContiguousRowMajor(shape Shape, stride Stride) bool {
+	// Row-major contiguous layout: the last index moves fastest.
+	// This implies:
+	//   stride[len-1] == 1
+	//   stride[i] == stride[i+1] * shape[i+1] for 0 <= i < len-1
 	expect := 1
-	for i := range len(shape) {
+	for i := len(shape) - 1; i >= 0; i-- {
 		if stride[i] != expect {
 			return false
 		}
