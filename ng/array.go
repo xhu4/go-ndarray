@@ -140,10 +140,10 @@ func (arr NDArray[E]) allElems(seq iter.Seq[Index]) iter.Seq2[Index, *E] {
 	}
 }
 
-// AllElemsL iterate through all elements, last dimension changes first.
+// AllElemsL iterates through all elements, last dimension changes first.
 func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesL()) }
 
-// AllElemsF iterate through all elements, first dimension changes first.
+// AllElemsF iterates through all elements, first dimension changes first.
 func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesF()) }
 
 func (arr NDArray[E]) Assign(other NDArray[E]) error {
