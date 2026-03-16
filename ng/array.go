@@ -189,7 +189,7 @@ func isContiguousColMajor(shape Shape, stride Stride) bool {
 	//   stride[0] == 1
 	//   stride[i] == stride[i-1] * shape[i-1] for i > 0
 	expect := 1
-	for i := 0; i < len(shape); i++ {
+	for i := range len(shape) {
 		if stride[i] != expect {
 			return false
 		}
@@ -211,12 +211,6 @@ func isContiguousRowMajor(shape Shape, stride Stride) bool {
 		expect *= shape[i]
 	}
 	return true
-}
-
-func reversed[E any](arr []E) []E {
-	result := slices.Clone(arr)
-	slices.Reverse(result)
-	return result
 }
 
 // Shape returns the shape of this array, as []int.
