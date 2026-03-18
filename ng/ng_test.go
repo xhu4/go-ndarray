@@ -25,6 +25,42 @@ func TestAt(t *testing.T) {
 	assertPanic(t, func() { x.At(3, 2) }, "x.At(3, 2)")
 }
 
+func TestSharesMemory(t *testing.T) {
+	x := MustNew[int]([][]int{{1, 2}, {3, 4}})
+	tests := []struct {
+		lhs  NDArray[int]
+		rhs  NDArray[int]
+		want bool
+	}{
+		{x, x, true},
+		{x, x.Clone(), false},
+		{x, x.Slice(S(), SAt(1)), true},
+		{x, x.Slice(S(), SAt(1)).MustReshape(2), false},
+	}
+	for _, test := range tests {
+		got := SharesMemory(test.lhs, test.rhs)
+		if test.want != got {
+			t.Errorf("SharesMemory(%v, %v) == %v", test.lhs, test.rhs, got)
+		}
+	}
+}
+
+func TestReshape(t *testing.T) {
+	x := Arange(0, 24, 1)
+	for _, shape := range []Shape{{2, 3, 4}, {4, 3, 2}, {4, 6}, {1, 1, 24}} {
+		reshaped := x.MustReshape(shape...)
+		if !x.Equal(reshaped.MustReshape(24)) {
+			t.Errorf("reshape to and from %v changed", shape)
+		}
+		for idx, elem := range reshaped.AllElems() {
+			flatIdx := resolveIndex(idx, reshaped.stride, reshaped.shape)
+			if *x.At(flatIdx) != *elem {
+				t.Errorf("reshaped[%v] != x[%v]", idx, flatIdx)
+			}
+		}
+	}
+}
+
 func TestGetShape(t *testing.T) {
 	tests := []struct {
 		data any
@@ -258,7 +294,7 @@ func TestAllElems(t *testing.T) {
 		wantVals := []int{1, 2, 3, 4, 5, 6}
 		var gotIndices []Index
 		var gotVals []int
-		for idx, p := range a.AllElemsL() {
+		for idx, p := range a.AllElems() {
 			gotIndices = append(gotIndices, slices.Clone(idx))
 			gotVals = append(gotVals, *p)
 		}
@@ -286,6 +322,55 @@ func TestAllElems(t *testing.T) {
 			t.Errorf("AllElemsF values = %v, want %v", gotVals, wantVals)
 		}
 	})
+}
+
+func TestIsContiguous(t *testing.T) {
+	tests := []struct {
+		shape  Shape
+		stride Stride
+		want   bool
+	}{
+		{
+			[]int{2, 3},
+			[]int{1, 2},
+			true,
+		}, {
+			[]int{2, 3},
+			[]int{3, 1},
+			true,
+		}, {
+			[]int{2, 3, 4},
+			[]int{-1, -2, -6},
+			true,
+		}, {
+			[]int{2, 3, 4},
+			[]int{-12, -4, -1},
+			true,
+		}, {
+			[]int{2, 3},
+			[]int{-1, 2},
+			false,
+		}, {
+			[]int{2, 3},
+			[]int{-3, 1},
+			false,
+		}, {
+			[]int{2, 3, 4},
+			[]int{-1, -4, -12},
+			false,
+		}, {
+			[]int{2, 3, 4},
+			[]int{-24, -8, -1},
+			false,
+		},
+	}
+
+	for _, test := range tests {
+		got := isContiguous(test.shape, test.stride)
+		if test.want != got {
+			t.Errorf("isContiguous(%v, %v) == %v", test.shape, test.stride, got)
+		}
+	}
 }
 
 func TestAssign(t *testing.T) {

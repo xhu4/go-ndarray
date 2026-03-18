@@ -34,14 +34,6 @@ type evenSlicer struct {
 // Use SAt(i) to create a indexSlicer.
 type indexSlicer int
 
-func nElem(begin int, end int, step int) int {
-	minusOne := -1
-	if step < 0 {
-		minusOne = 1
-	}
-	return max(0, ((end-begin)+minusOne)/step+1)
-}
-
 func (s evenSlicer) slice(length int, stride int) (newLen *int, newStride int, offsetDiff int) {
 	var begin, end int
 	if s.begin == nil {

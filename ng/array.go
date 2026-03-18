@@ -5,15 +5,21 @@ import (
 	"bytes"
 	"fmt"
 	"iter"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/exp/constraints"
 )
 
 type Number interface {
-	constraints.Float | constraints.Integer | constraints.Complex
+	Real | constraints.Complex
+}
+
+type Real interface {
+	constraints.Float | constraints.Integer
 }
 
 // NDArray represents n-dimensional arrays like np.ndarray.
@@ -24,6 +30,7 @@ type NDArray[E Number] struct {
 	offset int
 }
 
+// String converts the nd array to a multi-line string.
 func (arr NDArray[E]) String() string {
 	var buf bytes.Buffer
 	arr.Format(&buf, func(e E) string { return fmt.Sprint(e) }, 0, " ", " ", "\n", "[", "]")
@@ -45,6 +52,7 @@ func (arr NDArray[E]) Subarrays() iter.Seq2[int, NDArray[E]] {
 	}
 }
 
+// Format formats arr into buf.
 func (arr NDArray[E]) Format(buf *bytes.Buffer, formatter func(E) string, indent int, indentStr string, elemSep string, arrSep string, arrStart string, arrEnd string) {
 	if arr.Dim() == 0 {
 		buf.WriteString(formatter(*arr.At()))
@@ -140,8 +148,8 @@ func (arr NDArray[E]) allElems(seq iter.Seq[Index]) iter.Seq2[Index, *E] {
 	}
 }
 
-// AllElemsL iterates through all elements, last dimension changes first.
-func (arr NDArray[E]) AllElemsL() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesL()) }
+// AllElems iterates through all elements, last dimension changes first.
+func (arr NDArray[E]) AllElems() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesL()) }
 
 // AllElemsF iterates through all elements, first dimension changes first.
 func (arr NDArray[E]) AllElemsF() iter.Seq2[Index, *E] { return arr.allElems(arr.shape.indicesF()) }
@@ -173,6 +181,89 @@ func (arr NDArray[E]) Clone() NDArray[E] {
 	return newArr
 }
 
+// Reshape reshapes the array to the given shape.
+// The new shape should be compatible with the original shape. Otherwise it will return an error.
+// One shape dimension can be -1, in which case the size is derived.
+// A copy is made only if needed.
+func (arr NDArray[E]) Reshape(shape ...int) (NDArray[E], error) {
+	resolved := false
+	for i, s := range shape {
+		if s < 0 && s != -1 {
+			return arr, fmt.Errorf("reshape: invalid shape[%v] = %v", i, s)
+		} else if s == -1 {
+			if resolved {
+				return arr, fmt.Errorf("reshape: only one -1 is allowed, got %v", shape)
+			}
+			shapeSize := -Shape(shape).Size()
+			arrSize := arr.Size()
+			if arr.Size()%shapeSize != 0 {
+				return arr, fmt.Errorf("reshape: shape %v cannot divide arr size of %v", shape, arrSize)
+			}
+			shape[i] = arrSize / shapeSize
+		}
+	}
+
+	if isContiguousRowMajor(arr.shape, arr.stride) {
+		return NDArray[E]{
+			arr.data,
+			shape,
+			compactStride(shape),
+			arr.offset,
+		}, nil
+	} else if isContiguousReverseRowMajor(arr.shape, arr.stride) {
+		return NDArray[E]{
+			arr.data,
+			shape,
+			negated(compactStride(shape)),
+			arr.offset,
+		}, nil
+	} else if isContiguousColMajor(arr.shape, arr.stride) {
+		return NDArray[E]{
+			arr.data,
+			shape,
+			compactStrideColMajor(shape),
+			arr.offset,
+		}, nil
+	} else if isContiguousReverseColMajor(arr.shape, arr.stride) {
+		return NDArray[E]{
+			arr.data,
+			shape,
+			negated(compactStrideColMajor(shape)),
+			arr.offset,
+		}, nil
+	}
+	clone := arr.Clone()
+	return clone.Reshape(shape...)
+}
+
+// MustReshape reshapes arr to given shape. Panics if error happens.
+func (arr NDArray[E]) MustReshape(shape ...int) NDArray[E] {
+	ret, err := arr.Reshape(shape...)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
+
+// SharesMemory returns true if lhs and rhs shares the same underlying array.
+func SharesMemory[E Number](lhs NDArray[E], rhs NDArray[E]) bool {
+	return unsafe.SliceData(lhs.data) == unsafe.SliceData(rhs.data)
+}
+
+func reversed(s []int) []int {
+	ret := slices.Clone(s)
+	slices.Reverse(ret)
+	return ret
+}
+
+func negated(s []int) []int {
+	ret := slices.Clone(s)
+	for i := range ret {
+		ret[i] = -ret[i]
+	}
+	return ret
+}
+
 func isContiguous(shape Shape, stride Stride) bool {
 	if len(shape) != len(stride) {
 		panic("shape and stride not in the same dimension")
@@ -180,22 +271,10 @@ func isContiguous(shape Shape, stride Stride) bool {
 	if len(shape) == 0 {
 		return true
 	}
-	return isContiguousRowMajor(shape, stride) || isContiguousColMajor(shape, stride)
-}
-
-func isContiguousColMajor(shape Shape, stride Stride) bool {
-	// Column-major contiguous layout: the first index moves fastest.
-	// This implies:
-	//   stride[0] == 1
-	//   stride[i] == stride[i-1] * shape[i-1] for i > 0
-	expect := 1
-	for i := range len(shape) {
-		if stride[i] != expect {
-			return false
-		}
-		expect *= shape[i]
-	}
-	return true
+	return isContiguousRowMajor(shape, stride) ||
+		isContiguousReverseRowMajor(shape, stride) ||
+		isContiguousColMajor(shape, stride) ||
+		isContiguousReverseColMajor(shape, stride)
 }
 
 func isContiguousRowMajor(shape Shape, stride Stride) bool {
@@ -211,6 +290,18 @@ func isContiguousRowMajor(shape Shape, stride Stride) bool {
 		expect *= shape[i]
 	}
 	return true
+}
+
+func isContiguousReverseRowMajor(shape Shape, stride Stride) bool {
+	return isContiguousRowMajor(shape, negated(stride))
+}
+
+func isContiguousColMajor(shape Shape, stride Stride) bool {
+	return isContiguousRowMajor(reversed(shape), reversed(negated(stride)))
+}
+
+func isContiguousReverseColMajor(shape Shape, stride Stride) bool {
+	return isContiguousColMajor(shape, negated(stride))
 }
 
 // Shape returns the shape of this array, as []int.
@@ -251,6 +342,39 @@ func MustNew[E Number](data any) NDArray[E] {
 	if err != nil {
 		panic(err)
 	}
+	return arr
+}
+
+func nElem[E Real](start E, end E, step E) int {
+	total := end - start
+	return max(0, int(math.Ceil(float64(total)/float64(step))))
+}
+
+// Arange returns a 1D array from start to (excluding) stop with adjacent elements step apart.
+func Arange[E Real](start E, stop E, step E) NDArray[E] {
+	size := nElem(start, stop, step)
+	arr := NewZeros[E](size)
+	for i := range size {
+		*arr.At(i) = start + step*E(i)
+	}
+	return arr
+}
+
+// LinspaceStep returns (arr, step).
+// arr is an evenly spaced 1D array arr of shape {num} within the interval [start, end].
+// step is the step size, the difference between two adjacent elements in the array.
+func LinspaceStep[E Real](start E, end E, num int) (arr NDArray[E], step E) {
+	arr = NewZeros[E](num)
+	step = (end - start) / E(num)
+	for i := range num {
+		*arr.At(i) = start + step*E(i)
+	}
+	return arr, step
+}
+
+// Linspace returns an evenly spaced 1D array arr of shape {num} within the interval [start, end]
+func Linspace[E Real](start E, end E, num int) NDArray[E] {
+	arr, _ := LinspaceStep(start, end, num)
 	return arr
 }
 
@@ -358,6 +482,10 @@ func compactStride(shape Shape) Stride {
 		stride[i] = stride[prev] * shape[prev]
 	}
 	return stride
+}
+
+func compactStrideColMajor(shape Shape) Stride {
+	return reversed(compactStride(reversed(shape)))
 }
 
 func getShape(val reflect.Value) (Shape, error) {
